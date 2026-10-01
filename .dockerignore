@@ -4,6 +4,7 @@
 __pycache__
 *.py[cod]
 backend/fieldnote_accounts.sqlite3*
+backend/.fieldnote-secret
 backend/workspace_files
 frontend/node_modules
 frontend/dist

@@ -1,13 +1,15 @@
 services:
-  - type: pserv
-    name: claritydesk-backend
+  - type: web
+    name: claritydesk
     runtime: docker
-    plan: starter
-    dockerfilePath: ./backend/Dockerfile
-    dockerContext: ./backend
+    plan: free
+    dockerfilePath: ./Dockerfile.render
+    dockerContext: .
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
     envVars:
       - key: CLARITYDESK_DATA_DIR
-        value: /app/data
+        value: /tmp/claritydesk-data
       - key: APP_ORIGINS
         sync: false
       - key: OLLAMA_BASE_URL
@@ -18,16 +20,3 @@ services:
         value: gemini-2.5-flash-lite
       - key: GEMINI_API_KEY
         sync: false
-    disk:
-      name: claritydesk-data
-      mountPath: /app/data
-      sizeGB: 10
-
-  - type: web
-    name: claritydesk
-    runtime: docker
-    plan: starter
-    dockerfilePath: ./frontend/Dockerfile.render
-    dockerContext: ./frontend
-    healthCheckPath: /
-    autoDeployTrigger: commit

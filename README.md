@@ -43,22 +43,23 @@ Open `http://localhost:8080`. The frontend serves the built React app and proxie
 
 ### Render Blueprint deployment
 
-`render.yaml` defines a public `claritydesk` frontend web service and a private `claritydesk-backend` service. The backend owns a 10 GB persistent disk for the SQLite database, signing key, and uploaded workspace files. This deployment uses the existing Docker images, but the Render frontend has a separate Nginx config so `/api/*` reaches the private backend service over Render's internal network.
+`render.yaml` defines one public free `claritydesk` web service. Its Render-specific image runs the FastAPI backend and Nginx frontend together, so it does not require a paid private service or persistent disk.
 
 1. Push this repository to GitHub (already done for `VIVISANA/ClarityDesk`), then sign in to [Render](https://dashboard.render.com/).
 2. Select **New → Blueprint**, connect the GitHub repository, choose the `main` branch, and select `render.yaml`.
-3. Review the two services and approve the paid `starter` plans and persistent disk. Render's free plan cannot provide the persistent disk required for account and file storage.
-4. Create the Blueprint. If Render asks for the `APP_ORIGINS` value before the frontend URL exists, enter the frontend service URL shown by Render or temporarily leave the service pending; do not use `*`.
-5. Copy the frontend service's HTTPS URL, set that exact URL in the backend service's `APP_ORIGINS` environment variable, and manually redeploy the backend. Render provides `PORT` to the backend automatically; the backend Dockerfile uses it while defaulting to `8000` for native and local Compose use.
-6. Open the frontend service URL and check `/api/health` through that same origin. The backend health response should be `200` even when Ollama is unavailable.
+3. Select the **Free** instance type and create the single service. No payment information is required for this demo deployment.
+4. Copy the service's HTTPS URL, set the `APP_ORIGINS` environment variable to that exact URL, and redeploy. Do not use `*`.
+5. Open the service URL and check `/api/health` through that same origin. The response should be `200` even when Gemini is unavailable.
 
-Required Render configuration is `APP_ORIGINS` (the exact frontend URL), `AI_PROVIDER=gemini`, `GEMINI_MODEL` (default `gemini-2.5-flash-lite`), and the secret `GEMINI_API_KEY` from Google AI Studio. `CLARITYDESK_DATA_DIR`, the persistent disk, and the backend `PORT` are configured automatically by the Blueprint/runtime. `OLLAMA_BASE_URL` is blank in Render because a hosted service cannot reach Ollama on your Windows machine. Spreadsheet calculations remain deterministic and do not use Gemini; PDF/document and open-ended spreadsheet questions use the selected provider. After Render assigns or changes the frontend URL, update `APP_ORIGINS` and redeploy the backend.
+Required Render configuration is `APP_ORIGINS` (the exact service URL), `AI_PROVIDER=gemini`, `GEMINI_MODEL` (default `gemini-2.5-flash-lite`), and the secret `GEMINI_API_KEY` from Google AI Studio. The image uses Render's injected `PORT` for Nginx and keeps the backend on its internal loopback port. `CLARITYDESK_DATA_DIR` is `/tmp/claritydesk-data`, and `OLLAMA_BASE_URL` is blank because a hosted service cannot reach Ollama on your Windows machine. Spreadsheet calculations remain deterministic and do not use Gemini; PDF/document and open-ended spreadsheet questions use the selected provider.
+
+**Free demo limitations:** Render's free service sleeps after inactivity, has limited compute, and its filesystem is ephemeral. Accounts, uploaded files, the signing key, and other local state can disappear on restart, redeploy, or service replacement. Do not use this free demo for real user data, production accounts, backups, or compliance workloads. For production, use a paid persistent disk or an external database/object-storage design, a paid always-on service, HTTPS controls, backups, monitoring, rate limits, and a reviewed authentication strategy.
 
 ### Gemini setup and limitations
 
 Create an API key in [Google AI Studio](https://aistudio.google.com/apikey), then set `AI_PROVIDER=gemini`, `GEMINI_MODEL=gemini-2.5-flash-lite`, and `GEMINI_API_KEY` in the local environment or Render dashboard. Never put the key in Git, `.env.example`, logs, browser code, or a public issue. A Google account or consumer Gemini/Google One subscription does not by itself grant API access; Google AI Studio API access, region availability, billing/quota settings, and current model availability are separate. Free-tier quotas and rate limits can change, and prompts containing uploaded document text or spreadsheet samples are sent to Google's API when Gemini is selected. Review Google's current pricing, retention, privacy, and regional terms before using sensitive data. If Gemini is unavailable, switch back to `AI_PROVIDER=ollama` with a local Ollama model; no automatic provider fallback is performed.
 
-Render exposes the frontend publicly, so use HTTPS, a reviewed authentication design, backups and access controls for the persistent disk, rate limits, monitoring, and strict origin configuration before sharing the URL. The Render Blueprint contains no secrets or API tokens. Creating the Blueprint still requires an authorized Render dashboard account; this repository cannot create it without Render authorization.
+Render exposes the service publicly, so use strict origin configuration and treat the free deployment as a disposable demo. The Render Blueprint contains no secrets or API tokens. Creating the Blueprint still requires an authorized Render dashboard account; this repository cannot create it without Render authorization.
 
 ## Supported files and limits
 
@@ -88,7 +89,7 @@ This repository's GitHub Actions validate Python/frontend builds and build both 
 - `frontend/src` — React application.
 - `frontend/nginx.conf` — production SPA fallback and `/api` reverse proxy.
 - `docker-compose.yml` — single-origin production-style local deployment.
-- `render.yaml` — Render Blueprint with public frontend health checks, private backend, and persistent storage.
+- `render.yaml` — Render Blueprint for the free combined frontend/backend demo service.
 - `.github/workflows` — validation and GHCR image publishing.
 
 ## Limitations
