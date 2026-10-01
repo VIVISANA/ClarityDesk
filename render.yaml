@@ -1,0 +1,28 @@
+services:
+  - type: pserv
+    name: claritydesk-backend
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /api/health
+    envVars:
+      - key: CLARITYDESK_DATA_DIR
+        value: /app/data
+      - key: APP_ORIGINS
+        sync: false
+      - key: OLLAMA_BASE_URL
+        value: ""
+    disk:
+      name: claritydesk-data
+      mountPath: /app/data
+      sizeGB: 10
+
+  - type: web
+    name: claritydesk
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./frontend/Dockerfile.render
+    dockerContext: ./frontend
+    healthCheckPath: /
+    autoDeployTrigger: commit

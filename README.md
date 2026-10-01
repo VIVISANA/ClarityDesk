@@ -41,6 +41,21 @@ Open `http://localhost:8080`. The frontend serves the built React app and proxie
 
 `APP_ORIGINS` is a comma-separated exact-origin allowlist for credentialed API requests. `CLARITYDESK_PORT` changes the host port. `OLLAMA_BASE_URL` configures the backend's model-service URL; Compose defaults it to `http://host.docker.internal:11434` so a Docker container can reach Ollama on the Windows host. Do not set `APP_ORIGINS=*` while credentials are enabled. The Compose setup does not run Ollama; provide a separately secured Ollama service and configure the application before enabling it in production.
 
+### Render Blueprint deployment
+
+`render.yaml` defines a public `claritydesk` frontend web service and a private `claritydesk-backend` service. The backend owns a 10 GB persistent disk for the SQLite database, signing key, and uploaded workspace files. This deployment uses the existing Docker images, but the Render frontend has a separate Nginx config so `/api/*` reaches the private backend service over Render's internal network.
+
+1. Push this repository to GitHub (already done for `VIVISANA/ClarityDesk`), then sign in to [Render](https://dashboard.render.com/).
+2. Select **New → Blueprint**, connect the GitHub repository, choose the `main` branch, and select `render.yaml`.
+3. Review the two services and approve the paid `starter` plans and persistent disk. Render's free plan cannot provide the persistent disk required for account and file storage.
+4. Create the Blueprint. If Render asks for the `APP_ORIGINS` value before the frontend URL exists, enter the frontend service URL shown by Render or temporarily leave the service pending; do not use `*`.
+5. Copy the frontend service's HTTPS URL, set that exact URL in the backend service's `APP_ORIGINS` environment variable, and manually redeploy the backend. Render provides `PORT` to the backend automatically; the backend Dockerfile uses it while defaulting to `8000` for native and local Compose use.
+6. Open the frontend service URL and check `/api/health` through that same origin. The backend health response should be `200` even when Ollama is unavailable.
+
+Required Render configuration is `APP_ORIGINS` (the exact frontend URL); `CLARITYDESK_DATA_DIR`, the persistent disk, and the backend `PORT` are configured automatically by the Blueprint/runtime. `OLLAMA_BASE_URL` is intentionally blank in Render because a hosted service cannot reach Ollama on your Windows machine. PDF and open-ended document questions therefore remain unavailable until you provide a separately hosted, private, secured Ollama-compatible endpoint and set this variable; spreadsheet features do not require it. After Render assigns or changes the frontend URL, update `APP_ORIGINS` and redeploy the backend.
+
+Render exposes the frontend publicly, so use HTTPS, a reviewed authentication design, backups and access controls for the persistent disk, rate limits, monitoring, and strict origin configuration before sharing the URL. The Render Blueprint contains no secrets or API tokens. Creating the Blueprint still requires an authorized Render dashboard account; this repository cannot create it without Render authorization.
+
 ## Supported files and limits
 
 My files accepts CSV, TSV, Excel (`.xlsx`, `.xlsm`, `.xls`), OpenDocument spreadsheets (`.ods`), PDFs, Word (`.docx`), PowerPoint (`.pptx`), and public Google Sheets links. Legacy `.doc` and `.ppt` files are not supported.
@@ -69,6 +84,7 @@ This repository's GitHub Actions validate Python/frontend builds and build both 
 - `frontend/src` — React application.
 - `frontend/nginx.conf` — production SPA fallback and `/api` reverse proxy.
 - `docker-compose.yml` — single-origin production-style local deployment.
+- `render.yaml` — Render Blueprint with public frontend, private backend, health checks, and persistent storage.
 - `.github/workflows` — validation and GHCR image publishing.
 
 ## Limitations
