@@ -6,6 +6,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import secrets
@@ -29,6 +30,7 @@ from pydantic import BaseModel, Field
 from starlette.responses import JSONResponse
 
 app = FastAPI(title="ClarityDesk", version="0.2.0")
+logger = logging.getLogger("claritydesk.ai")
 datasets: dict[str, pd.DataFrame] = {}
 DATA_ROOT = Path(os.getenv("CLARITYDESK_DATA_DIR", str(Path(__file__).parent)))
 DATA_ROOT.mkdir(parents=True, exist_ok=True)
@@ -58,6 +60,22 @@ class ModelProviderError(Exception):
         self.detail = detail
 
 
+def gemini_error_message(status_code: int) -> str:
+    if status_code == 400:
+        return "Gemini rejected the request. Check GEMINI_MODEL and ensure the selected model supports generateContent."
+    if status_code == 401:
+        return "Gemini rejected the API key. Create a valid Google AI Studio API key and update GEMINI_API_KEY."
+    if status_code == 403:
+        return "Gemini denied access. Check API-key restrictions, Generative Language API access, and region availability."
+    if status_code == 404:
+        return "Gemini model was not found. Check GEMINI_MODEL against the models available to this API key."
+    if status_code == 429:
+        return "Gemini free-tier quota or rate limit was reached. Try again later or review quota settings."
+    if status_code >= 500:
+        return "Gemini is temporarily unavailable. Try again later."
+    return "Gemini could not complete this request."
+
+
 def model_text(prompt: str) -> str:
     if AI_PROVIDER == "ollama":
         body = json.dumps({"model": OLLAMA_MODEL, "prompt": prompt, "stream": False}).encode("utf-8")
@@ -81,17 +99,30 @@ def model_text(prompt: str) -> str:
         try:
             with urllib.request.urlopen(request, timeout=120) as response:
                 result = json.loads(response.read().decode("utf-8"))
-            answer = str(result["candidates"][0]["content"]["parts"][0]["text"]).strip()
+            candidates = result.get("candidates") if isinstance(result, dict) else None
+            if not isinstance(candidates, list) or not candidates:
+                feedback = result.get("promptFeedback", {}) if isinstance(result, dict) else {}
+                block_reason = feedback.get("blockReason") if isinstance(feedback, dict) else None
+                logger.warning("Gemini response missing candidates; block_reason=%s", block_reason or "unknown")
+                raise ModelProviderError(502, "Gemini returned no answer. The prompt may have been blocked by safety filters.")
+            candidate = candidates[0]
+            parts = candidate.get("content", {}).get("parts", [])
+            answer = "".join(str(part.get("text", "")) for part in parts if isinstance(part, dict)).strip()
+            if not answer:
+                finish_reason = candidate.get("finishReason", "unknown")
+                logger.warning("Gemini response contained no text; finish_reason=%s", finish_reason)
+                raise ModelProviderError(502, "Gemini returned no text. The request may have been blocked or stopped by a response limit.")
         except urllib.error.HTTPError as exc:
-            if exc.code in (401, 403):
-                detail = "Gemini rejected the configured API key or model access."
-            elif exc.code == 429:
-                detail = "Gemini free-tier quota or rate limit was reached. Try again later."
-            else:
-                detail = "Gemini could not complete this request."
-            raise ModelProviderError(502, detail) from exc
-        except (OSError, TimeoutError, KeyError, IndexError, TypeError, ValueError) as exc:
-            raise ModelProviderError(503, "Gemini is unavailable or returned an unexpected response.") from exc
+            logger.warning("Gemini HTTP error; status=%s reason=%s", exc.code, exc.reason)
+            raise ModelProviderError(502 if exc.code != 429 else 503, gemini_error_message(exc.code)) from exc
+        except ModelProviderError:
+            raise
+        except (OSError, TimeoutError) as exc:
+            logger.warning("Gemini transport error; type=%s", type(exc).__name__)
+            raise ModelProviderError(503, "Gemini could not be reached. Check network access from the hosted service.") from exc
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            logger.warning("Gemini response schema error; type=%s", type(exc).__name__)
+            raise ModelProviderError(502, "Gemini returned an unexpected response. Check the selected model and try again.") from exc
     else:
         raise ModelProviderError(500, "AI_PROVIDER must be either 'ollama' or 'gemini'.")
     if not answer:
@@ -841,8 +872,12 @@ def health_check() -> dict[str, Any]:
             )
             with urllib.request.urlopen(request, timeout=3) as response:
                 models = json.loads(response.read().decode("utf-8")).get("models", [])
-            names = [str(item.get("name", "")).removeprefix("models/") for item in models]
-            model_state.update({"status": "online", "model_ready": GEMINI_MODEL in names, "model": GEMINI_MODEL})
+            compatible_models = [
+                str(item.get("name", "")).removeprefix("models/")
+                for item in models
+                if "generateContent" in item.get("supportedGenerationMethods", [])
+            ]
+            model_state.update({"status": "online", "model_ready": GEMINI_MODEL in compatible_models, "model": GEMINI_MODEL, "models": compatible_models})
         except (OSError, TimeoutError, ValueError, TypeError):
             model_state["reason"] = "Gemini could not be reached"
         return {"status": "ok", "service": "ClarityDesk", "ollama": model_state}
