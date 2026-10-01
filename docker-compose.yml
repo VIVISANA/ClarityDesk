@@ -5,6 +5,9 @@ services:
     environment:
       APP_ORIGINS: ${APP_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
       CLARITYDESK_DATA_DIR: /app/data
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - claritydesk-data:/app/data
     restart: unless-stopped

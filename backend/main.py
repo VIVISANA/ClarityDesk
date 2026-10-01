@@ -33,6 +33,7 @@ DATA_ROOT = Path(os.getenv("CLARITYDESK_DATA_DIR", str(Path(__file__).parent)))
 DATA_ROOT.mkdir(parents=True, exist_ok=True)
 WORKSPACE_ROOT = DATA_ROOT / "workspace_files"
 WORKSPACE_ROOT.mkdir(exist_ok=True)
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
 active_workspace = contextvars.ContextVar("fieldnote_workspace", default=None)
 AUTH_DB = DATA_ROOT / "fieldnote_accounts.sqlite3"
 AUTH_SECRET_FILE = DATA_ROOT / ".fieldnote-secret"
@@ -583,7 +584,7 @@ def ask_spreadsheet(request: SpreadsheetQuestion) -> dict[str, Any]:
     model_prompt = f"Answer the user's question using only this spreadsheet data. Do not invent facts. If you need a chart, say what columns to plot but do not output a chart.\n\nQuestion: {question}\n\nData:\n{context}"
     try:
         body = json.dumps({"model": "llama3.2", "prompt": model_prompt, "stream": False}).encode("utf-8")
-        req = urllib.request.Request("http://127.0.0.1:11434/api/generate", data=body, headers={"Content-Type": "application/json"})
+        req = urllib.request.Request(f"{OLLAMA_BASE_URL}/api/generate", data=body, headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=180) as response:
             result = json.loads(response.read().decode("utf-8"))
         return {"answer": result.get("response", ""), "chart": None}
@@ -776,7 +777,7 @@ def ask_pdf(request: PdfPrompt) -> dict[str, str]:
         import urllib.error
 
         body = json.dumps({"model": "llama3.2", "prompt": request.prompt, "stream": False}).encode("utf-8")
-        req = urllib.request.Request("http://127.0.0.1:11434/api/generate", data=body, headers={"Content-Type": "application/json"})
+        req = urllib.request.Request(f"{OLLAMA_BASE_URL}/api/generate", data=body, headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=180) as response:
             result = json.loads(response.read().decode("utf-8"))
         return {"answer": result.get("response", "")}
@@ -790,7 +791,7 @@ def ask_pdf(request: PdfPrompt) -> dict[str, str]:
 def health_check() -> dict[str, Any]:
     model_state: dict[str, Any] = {"status": "offline", "model_ready": False}
     try:
-        req = urllib.request.Request("http://127.0.0.1:11434/api/tags", headers={"User-Agent": "ClarityDesk local health check"})
+        req = urllib.request.Request(f"{OLLAMA_BASE_URL}/api/tags", headers={"User-Agent": "ClarityDesk local health check"})
         with urllib.request.urlopen(req, timeout=0.6) as response:
             models = json.loads(response.read().decode("utf-8")).get("models", [])
         names = [str(item.get("name", "")) for item in models]
