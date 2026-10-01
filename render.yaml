@@ -18,5 +18,7 @@ services:
         value: gemini
       - key: GEMINI_MODEL
         value: gemini-2.5-flash-lite
+      - key: GEMINI_FALLBACK_MODEL
+        value: gemini-flash-lite-latest
       - key: GEMINI_API_KEY
         sync: false
