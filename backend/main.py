@@ -41,6 +41,8 @@ AI_PROVIDER = os.getenv("AI_PROVIDER", "ollama").strip().lower()
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite").strip()
+MAX_GEMINI_PROMPT_CHARS = 100_000
+GEMINI_MAX_ATTEMPTS = 3
 active_workspace = contextvars.ContextVar("fieldnote_workspace", default=None)
 AUTH_DB = DATA_ROOT / "fieldnote_accounts.sqlite3"
 AUTH_SECRET_FILE = DATA_ROOT / ".fieldnote-secret"
@@ -76,6 +78,19 @@ def gemini_error_message(status_code: int) -> str:
     return "Gemini could not complete this request."
 
 
+def gemini_error_detail(error: urllib.error.HTTPError) -> str:
+    detail = gemini_error_message(error.code)
+    try:
+        payload = json.loads(error.read().decode("utf-8"))
+        provider_message = payload.get("error", {}).get("message", "")
+        if isinstance(provider_message, str) and provider_message:
+            safe_message = re.sub(r"(?i)(key|token|authorization)\s*[=:]\s*\S+", r"\1=[redacted]", provider_message)
+            detail = f"{detail} Provider response: {safe_message[:240]}"
+    except (OSError, UnicodeDecodeError, ValueError, TypeError, AttributeError):
+        pass
+    return detail
+
+
 def model_text(prompt: str) -> str:
     if AI_PROVIDER == "ollama":
         body = json.dumps({"model": OLLAMA_MODEL, "prompt": prompt, "stream": False}).encode("utf-8")
@@ -93,36 +108,48 @@ def model_text(prompt: str) -> str:
     elif AI_PROVIDER == "gemini":
         if not GEMINI_API_KEY:
             raise ModelProviderError(503, "Gemini is selected but GEMINI_API_KEY is not configured.")
+        if len(prompt) > MAX_GEMINI_PROMPT_CHARS:
+            logger.warning("Gemini prompt truncated; chars=%s limit=%s", len(prompt), MAX_GEMINI_PROMPT_CHARS)
+            prompt = prompt[:MAX_GEMINI_PROMPT_CHARS] + "\n\n[Document text truncated for hosted model limits.]"
         endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
         body = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode("utf-8")
-        request = urllib.request.Request(endpoint, data=body, headers={"Content-Type": "application/json"})
-        try:
-            with urllib.request.urlopen(request, timeout=120) as response:
-                result = json.loads(response.read().decode("utf-8"))
-            candidates = result.get("candidates") if isinstance(result, dict) else None
-            if not isinstance(candidates, list) or not candidates:
-                feedback = result.get("promptFeedback", {}) if isinstance(result, dict) else {}
-                block_reason = feedback.get("blockReason") if isinstance(feedback, dict) else None
-                logger.warning("Gemini response missing candidates; block_reason=%s", block_reason or "unknown")
-                raise ModelProviderError(502, "Gemini returned no answer. The prompt may have been blocked by safety filters.")
-            candidate = candidates[0]
-            parts = candidate.get("content", {}).get("parts", [])
-            answer = "".join(str(part.get("text", "")) for part in parts if isinstance(part, dict)).strip()
-            if not answer:
-                finish_reason = candidate.get("finishReason", "unknown")
-                logger.warning("Gemini response contained no text; finish_reason=%s", finish_reason)
-                raise ModelProviderError(502, "Gemini returned no text. The request may have been blocked or stopped by a response limit.")
-        except urllib.error.HTTPError as exc:
-            logger.warning("Gemini HTTP error; status=%s reason=%s", exc.code, exc.reason)
-            raise ModelProviderError(502 if exc.code != 429 else 503, gemini_error_message(exc.code)) from exc
-        except ModelProviderError:
-            raise
-        except (OSError, TimeoutError) as exc:
-            logger.warning("Gemini transport error; type=%s", type(exc).__name__)
-            raise ModelProviderError(503, "Gemini could not be reached. Check network access from the hosted service.") from exc
-        except (KeyError, IndexError, TypeError, ValueError) as exc:
-            logger.warning("Gemini response schema error; type=%s", type(exc).__name__)
-            raise ModelProviderError(502, "Gemini returned an unexpected response. Check the selected model and try again.") from exc
+        for attempt in range(1, GEMINI_MAX_ATTEMPTS + 1):
+            request = urllib.request.Request(endpoint, data=body, headers={"Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(request, timeout=180) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+                candidates = result.get("candidates") if isinstance(result, dict) else None
+                if not isinstance(candidates, list) or not candidates:
+                    feedback = result.get("promptFeedback", {}) if isinstance(result, dict) else {}
+                    block_reason = feedback.get("blockReason") if isinstance(feedback, dict) else None
+                    logger.warning("Gemini response missing candidates; block_reason=%s", block_reason or "unknown")
+                    raise ModelProviderError(502, "Gemini returned no answer. The prompt may have been blocked by safety filters.")
+                candidate = candidates[0]
+                parts = candidate.get("content", {}).get("parts", [])
+                answer = "".join(str(part.get("text", "")) for part in parts if isinstance(part, dict)).strip()
+                if not answer:
+                    finish_reason = candidate.get("finishReason", "unknown")
+                    logger.warning("Gemini response contained no text; finish_reason=%s", finish_reason)
+                    raise ModelProviderError(502, "Gemini returned no text. The request may have been blocked or stopped by a response limit.")
+                break
+            except urllib.error.HTTPError as exc:
+                transient = exc.code == 429 or 500 <= exc.code <= 599
+                logger.warning("Gemini HTTP error; status=%s attempt=%s/%s", exc.code, attempt, GEMINI_MAX_ATTEMPTS)
+                if transient and attempt < GEMINI_MAX_ATTEMPTS:
+                    time.sleep(2 ** (attempt - 1))
+                    continue
+                raise ModelProviderError(503 if transient else 502, gemini_error_detail(exc)) from exc
+            except ModelProviderError:
+                raise
+            except (OSError, TimeoutError) as exc:
+                logger.warning("Gemini transport error; type=%s attempt=%s/%s", type(exc).__name__, attempt, GEMINI_MAX_ATTEMPTS)
+                if attempt < GEMINI_MAX_ATTEMPTS:
+                    time.sleep(2 ** (attempt - 1))
+                    continue
+                raise ModelProviderError(503, "Gemini timed out or could not be reached. Try a shorter document or try again later.") from exc
+            except (KeyError, IndexError, TypeError, ValueError) as exc:
+                logger.warning("Gemini response schema error; type=%s", type(exc).__name__)
+                raise ModelProviderError(502, "Gemini returned an unexpected response. Check the selected model and try again.") from exc
     else:
         raise ModelProviderError(500, "AI_PROVIDER must be either 'ollama' or 'gemini'.")
     if not answer:
