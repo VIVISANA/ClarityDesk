@@ -1,0 +1,6 @@
+__pycache__
+*.py[cod]
+fieldnote_accounts.sqlite3*
+.fieldnote-secret
+workspace_files
+*.log

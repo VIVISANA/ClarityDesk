@@ -1,0 +1,26 @@
+# Python environment and generated files
+.venv/
+__pycache__/
+*.py[cod]
+
+# Local account credentials, signing key, and uploaded user files
+backend/.fieldnote-secret
+backend/fieldnote_accounts.sqlite3*
+backend/workspace_files/
+
+# Frontend dependencies and production build output
+frontend/node_modules/
+frontend/dist/
+Fieldnote-source.zip
+
+# Local service logs and environment files
+*.log
+.env
+.env.*
+!.env.example
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,22 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    environment:
+      APP_ORIGINS: ${APP_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
+      CLARITYDESK_DATA_DIR: /app/data
+    volumes:
+      - claritydesk-data:/app/data
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "${CLARITYDESK_PORT:-8080}:80"
+    restart: unless-stopped
+
+volumes:
+  claritydesk-data:

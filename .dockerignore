@@ -1,0 +1,10 @@
+.git
+.github
+.venv
+__pycache__
+*.py[cod]
+backend/fieldnote_accounts.sqlite3*
+backend/workspace_files
+frontend/node_modules
+frontend/dist
+*.log
