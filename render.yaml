@@ -5,7 +5,6 @@ services:
     plan: starter
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
-    healthCheckPath: /api/health
     envVars:
       - key: CLARITYDESK_DATA_DIR
         value: /app/data

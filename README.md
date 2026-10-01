@@ -88,7 +88,7 @@ This repository's GitHub Actions validate Python/frontend builds and build both 
 - `frontend/src` — React application.
 - `frontend/nginx.conf` — production SPA fallback and `/api` reverse proxy.
 - `docker-compose.yml` — single-origin production-style local deployment.
-- `render.yaml` — Render Blueprint with public frontend, private backend, health checks, and persistent storage.
+- `render.yaml` — Render Blueprint with public frontend health checks, private backend, and persistent storage.
 - `.github/workflows` — validation and GHCR image publishing.
 
 ## Limitations
