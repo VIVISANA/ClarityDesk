@@ -2,6 +2,10 @@
 
 ClarityDesk is a local-first workspace for exploring spreadsheets and asking questions about documents. It includes a React frontend and a FastAPI service. Spreadsheet summaries and charts are calculated locally; document questions use Ollama when the `llama3.2` model is available.
 
+**Live demo:** [claritydesk-9ycf.onrender.com](https://claritydesk-9ycf.onrender.com/)
+
+The hosted demo runs on Render's free tier: it may sleep after inactivity and its filesystem is ephemeral. Do not use it for real user data or persistent accounts; see the deployment caveats below.
+
 ## Choose a deployment
 
 ### Local development on Windows
