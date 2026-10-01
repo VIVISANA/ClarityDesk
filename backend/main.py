@@ -12,6 +12,7 @@ import secrets
 import sqlite3
 import shutil
 import time
+import urllib.error
 import urllib.request
 import uuid
 import zipfile
@@ -34,6 +35,10 @@ DATA_ROOT.mkdir(parents=True, exist_ok=True)
 WORKSPACE_ROOT = DATA_ROOT / "workspace_files"
 WORKSPACE_ROOT.mkdir(exist_ok=True)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+AI_PROVIDER = os.getenv("AI_PROVIDER", "ollama").strip().lower()
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2").strip()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite").strip()
 active_workspace = contextvars.ContextVar("fieldnote_workspace", default=None)
 AUTH_DB = DATA_ROOT / "fieldnote_accounts.sqlite3"
 AUTH_SECRET_FILE = DATA_ROOT / ".fieldnote-secret"
@@ -44,6 +49,54 @@ MAX_GOOGLE_SHEET_BYTES = 15_000_000
 MAX_SPREADSHEET_ROWS = 500_000
 MAX_SPREADSHEET_COLUMNS = 200
 FILE_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+
+
+class ModelProviderError(Exception):
+    def __init__(self, status_code: int, detail: str):
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+
+
+def model_text(prompt: str) -> str:
+    if AI_PROVIDER == "ollama":
+        body = json.dumps({"model": OLLAMA_MODEL, "prompt": prompt, "stream": False}).encode("utf-8")
+        request = urllib.request.Request(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=180) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            answer = str(result.get("response", "")).strip()
+        except (OSError, TimeoutError, ValueError) as exc:
+            raise ModelProviderError(503, "The local Ollama model is unavailable. Start Ollama and ensure the configured model is installed.") from exc
+    elif AI_PROVIDER == "gemini":
+        if not GEMINI_API_KEY:
+            raise ModelProviderError(503, "Gemini is selected but GEMINI_API_KEY is not configured.")
+        endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+        body = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode("utf-8")
+        request = urllib.request.Request(endpoint, data=body, headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            answer = str(result["candidates"][0]["content"]["parts"][0]["text"]).strip()
+        except urllib.error.HTTPError as exc:
+            if exc.code in (401, 403):
+                detail = "Gemini rejected the configured API key or model access."
+            elif exc.code == 429:
+                detail = "Gemini free-tier quota or rate limit was reached. Try again later."
+            else:
+                detail = "Gemini could not complete this request."
+            raise ModelProviderError(502, detail) from exc
+        except (OSError, TimeoutError, KeyError, IndexError, TypeError, ValueError) as exc:
+            raise ModelProviderError(503, "Gemini is unavailable or returned an unexpected response.") from exc
+    else:
+        raise ModelProviderError(500, "AI_PROVIDER must be either 'ollama' or 'gemini'.")
+    if not answer:
+        raise ModelProviderError(502, "The selected AI provider returned an empty response.")
+    return answer
 
 
 def auth_secret() -> bytes:
@@ -583,13 +636,9 @@ def ask_spreadsheet(request: SpreadsheetQuestion) -> dict[str, Any]:
     context = frame.head(80).to_csv(index=False)
     model_prompt = f"Answer the user's question using only this spreadsheet data. Do not invent facts. If you need a chart, say what columns to plot but do not output a chart.\n\nQuestion: {question}\n\nData:\n{context}"
     try:
-        body = json.dumps({"model": "llama3.2", "prompt": model_prompt, "stream": False}).encode("utf-8")
-        req = urllib.request.Request(f"{OLLAMA_BASE_URL}/api/generate", data=body, headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=180) as response:
-            result = json.loads(response.read().decode("utf-8"))
-        return {"answer": result.get("response", ""), "chart": None}
-    except (OSError, TimeoutError):
-        raise HTTPException(status_code=503, detail="I can summarize the file and answer counts and simple totals now. For more open-ended questions, install the free Ollama model shown in the setup notes.")
+        return {"answer": model_text(model_prompt), "chart": None}
+    except ModelProviderError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 def spreadsheet_result(name: str, data: bytes) -> dict[str, Any]:
@@ -773,29 +822,37 @@ def ask_pdf(request: PdfPrompt) -> dict[str, str]:
     if request.task not in {"custom", "summarize", "explain", "keypoints"}:
         raise HTTPException(status_code=422, detail="That document task is not supported.")
     try:
-        import json
-        import urllib.error
-
-        body = json.dumps({"model": "llama3.2", "prompt": request.prompt, "stream": False}).encode("utf-8")
-        req = urllib.request.Request(f"{OLLAMA_BASE_URL}/api/generate", data=body, headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=180) as response:
-            result = json.loads(response.read().decode("utf-8"))
-        return {"answer": result.get("response", "")}
-    except (OSError, TimeoutError) as exc:
-        raise HTTPException(status_code=503, detail="Ollama is not running locally yet. Install Ollama and download the free llama3.2 model, then try again.") from exc
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail="The local model could not complete this request.") from exc
+        return {"answer": model_text(request.prompt)}
+    except ModelProviderError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @app.get("/api/health")
 def health_check() -> dict[str, Any]:
-    model_state: dict[str, Any] = {"status": "offline", "model_ready": False}
+    if AI_PROVIDER == "gemini":
+        model_state: dict[str, Any] = {"provider": "gemini", "status": "offline", "model_ready": False}
+        if not GEMINI_API_KEY:
+            model_state["reason"] = "GEMINI_API_KEY is not configured"
+            return {"status": "ok", "service": "ClarityDesk", "ollama": model_state}
+        try:
+            request = urllib.request.Request(
+                f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}",
+                headers={"User-Agent": "ClarityDesk health check"},
+            )
+            with urllib.request.urlopen(request, timeout=3) as response:
+                models = json.loads(response.read().decode("utf-8")).get("models", [])
+            names = [str(item.get("name", "")).removeprefix("models/") for item in models]
+            model_state.update({"status": "online", "model_ready": GEMINI_MODEL in names, "model": GEMINI_MODEL})
+        except (OSError, TimeoutError, ValueError, TypeError):
+            model_state["reason"] = "Gemini could not be reached"
+        return {"status": "ok", "service": "ClarityDesk", "ollama": model_state}
+    model_state: dict[str, Any] = {"provider": "ollama", "status": "offline", "model_ready": False}
     try:
         req = urllib.request.Request(f"{OLLAMA_BASE_URL}/api/tags", headers={"User-Agent": "ClarityDesk local health check"})
         with urllib.request.urlopen(req, timeout=0.6) as response:
             models = json.loads(response.read().decode("utf-8")).get("models", [])
         names = [str(item.get("name", "")) for item in models]
-        model_state = {"status": "online", "model_ready": any(name == "llama3.2" or name.startswith("llama3.2:") for name in names), "models": names}
+        model_state = {"provider": "ollama", "status": "online", "model_ready": any(name == OLLAMA_MODEL or name.startswith(f"{OLLAMA_MODEL}:") for name in names), "models": names}
     except (OSError, TimeoutError, ValueError):
         pass
     return {"status": "ok", "service": "ClarityDesk", "ollama": model_state}

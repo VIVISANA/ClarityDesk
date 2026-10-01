@@ -26,7 +26,7 @@ npm run dev -- --host 127.0.0.1
 
 Open the Vite URL, normally `http://127.0.0.1:5173`. Vite proxies `/api` to the local FastAPI service. The API health endpoint is `http://127.0.0.1:8000/api/health`.
 
-For PDF and open-ended document questions, install Ollama and run `ollama run llama3.2`. Spreadsheet tools remain available without Ollama. Native development defaults to `http://127.0.0.1:11434`; set `OLLAMA_BASE_URL` if Ollama listens elsewhere.
+For PDF and open-ended document questions, install Ollama and run `ollama run llama3.2`. Spreadsheet tools remain available without a model provider. Native development defaults to `AI_PROVIDER=ollama`, `OLLAMA_MODEL=llama3.2`, and `http://127.0.0.1:11434`; set `OLLAMA_BASE_URL` if Ollama listens elsewhere.
 
 ### Docker Compose
 
@@ -39,7 +39,7 @@ docker compose up --build -d
 
 Open `http://localhost:8080`. The frontend serves the built React app and proxies `/api/*` to the backend container. Uploaded files, account data, and the signing key are stored in the named `claritydesk-data` volume. Stop services with `docker compose down`; keep the volume to preserve local data.
 
-`APP_ORIGINS` is a comma-separated exact-origin allowlist for credentialed API requests. `CLARITYDESK_PORT` changes the host port. `OLLAMA_BASE_URL` configures the backend's model-service URL; Compose defaults it to `http://host.docker.internal:11434` so a Docker container can reach Ollama on the Windows host. Do not set `APP_ORIGINS=*` while credentials are enabled. The Compose setup does not run Ollama; provide a separately secured Ollama service and configure the application before enabling it in production.
+`APP_ORIGINS` is a comma-separated exact-origin allowlist for credentialed API requests. `CLARITYDESK_PORT` changes the host port. `AI_PROVIDER` is `ollama` by default and can be set to `gemini`; `OLLAMA_BASE_URL` configures the local model-service URL and Compose defaults it to `http://host.docker.internal:11434` so a container can reach Ollama on the Windows host. Gemini uses `GEMINI_API_KEY` and `GEMINI_MODEL`; the key is always supplied through an uncommitted environment or secret manager. Do not set `APP_ORIGINS=*` while credentials are enabled. The Compose setup does not run Ollama.
 
 ### Render Blueprint deployment
 
@@ -52,7 +52,11 @@ Open `http://localhost:8080`. The frontend serves the built React app and proxie
 5. Copy the frontend service's HTTPS URL, set that exact URL in the backend service's `APP_ORIGINS` environment variable, and manually redeploy the backend. Render provides `PORT` to the backend automatically; the backend Dockerfile uses it while defaulting to `8000` for native and local Compose use.
 6. Open the frontend service URL and check `/api/health` through that same origin. The backend health response should be `200` even when Ollama is unavailable.
 
-Required Render configuration is `APP_ORIGINS` (the exact frontend URL); `CLARITYDESK_DATA_DIR`, the persistent disk, and the backend `PORT` are configured automatically by the Blueprint/runtime. `OLLAMA_BASE_URL` is intentionally blank in Render because a hosted service cannot reach Ollama on your Windows machine. PDF and open-ended document questions therefore remain unavailable until you provide a separately hosted, private, secured Ollama-compatible endpoint and set this variable; spreadsheet features do not require it. After Render assigns or changes the frontend URL, update `APP_ORIGINS` and redeploy the backend.
+Required Render configuration is `APP_ORIGINS` (the exact frontend URL), `AI_PROVIDER=gemini`, `GEMINI_MODEL` (default `gemini-2.5-flash-lite`), and the secret `GEMINI_API_KEY` from Google AI Studio. `CLARITYDESK_DATA_DIR`, the persistent disk, and the backend `PORT` are configured automatically by the Blueprint/runtime. `OLLAMA_BASE_URL` is blank in Render because a hosted service cannot reach Ollama on your Windows machine. Spreadsheet calculations remain deterministic and do not use Gemini; PDF/document and open-ended spreadsheet questions use the selected provider. After Render assigns or changes the frontend URL, update `APP_ORIGINS` and redeploy the backend.
+
+### Gemini setup and limitations
+
+Create an API key in [Google AI Studio](https://aistudio.google.com/apikey), then set `AI_PROVIDER=gemini`, `GEMINI_MODEL=gemini-2.5-flash-lite`, and `GEMINI_API_KEY` in the local environment or Render dashboard. Never put the key in Git, `.env.example`, logs, browser code, or a public issue. A Google account or consumer Gemini/Google One subscription does not by itself grant API access; Google AI Studio API access, region availability, billing/quota settings, and current model availability are separate. Free-tier quotas and rate limits can change, and prompts containing uploaded document text or spreadsheet samples are sent to Google's API when Gemini is selected. Review Google's current pricing, retention, privacy, and regional terms before using sensitive data. If Gemini is unavailable, switch back to `AI_PROVIDER=ollama` with a local Ollama model; no automatic provider fallback is performed.
 
 Render exposes the frontend publicly, so use HTTPS, a reviewed authentication design, backups and access controls for the persistent disk, rate limits, monitoring, and strict origin configuration before sharing the URL. The Render Blueprint contains no secrets or API tokens. Creating the Blueprint still requires an authorized Render dashboard account; this repository cannot create it without Render authorization.
 
@@ -76,7 +80,7 @@ Before exposing a deployment beyond a trusted machine:
 - Set upload limits at every proxy layer, not only in FastAPI.
 - Do not expose the backend container directly to the public network; only the frontend proxy should be published.
 
-This repository's GitHub Actions validate Python/frontend builds and build both Docker images. Version tags publish images to GHCR using the workflow's ephemeral `GITHUB_TOKEN`; no application secrets are committed. Deployment remains an operator decision using the provided Compose configuration.
+This repository's GitHub Actions validate Python/frontend builds and build both Docker images. Version tags publish images to GHCR using the workflow's ephemeral `GITHUB_TOKEN`; no application secrets are committed. Deployment remains an operator decision using the provided Compose or Render configuration.
 
 ## Project layout
 

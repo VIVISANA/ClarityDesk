@@ -13,6 +13,12 @@ services:
         sync: false
       - key: OLLAMA_BASE_URL
         value: ""
+      - key: AI_PROVIDER
+        value: gemini
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash-lite
+      - key: GEMINI_API_KEY
+        sync: false
     disk:
       name: claritydesk-data
       mountPath: /app/data

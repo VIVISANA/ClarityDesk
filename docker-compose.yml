@@ -6,6 +6,10 @@ services:
       APP_ORIGINS: ${APP_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
       CLARITYDESK_DATA_DIR: /app/data
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      AI_PROVIDER: ${AI_PROVIDER:-ollama}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash-lite}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
